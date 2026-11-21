@@ -1,5 +1,9 @@
 # Timber & Steel
 
+[![Play Now](https://img.shields.io/badge/PLAY%20NOW-Timber%20%26%20Steel-16856b?style=for-the-badge)](https://aaronc1992.github.io/timber-and-steel/)
+
+**[Play in your browser](https://aaronc1992.github.io/timber-and-steel/)** — no download or installation needed.
+
 An original, self-contained knife-throwing arcade game. Watch the rotating timber, then stick every blade without hitting another one. Boss targets appear every fifth stage. Earn in-game money to buy permanent knife and log skins; endless mode starts a fresh run each time.
 
 ## Play locally
