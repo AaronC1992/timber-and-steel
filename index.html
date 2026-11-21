@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#111a24">
+  <title>Timber & Steel — Knife Throwing Arcade</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <a class="brand" href="#" aria-label="Timber and Steel home"><span class="brand-mark">✦</span><span>TIMBER <i>&</i> STEEL<small>THE KNIFE THROWING CLUB</small></span></a>
+      <div class="top-right"><span class="status-dot"></span> A LITTLE GAME OF PRECISION <span class="top-divider"></span> <span>EST. 2025</span></div>
+    </header>
+
+    <main class="layout">
+      <aside class="side left-side">
+        <div class="eyebrow"><span class="line"></span> WELCOME TO THE CLUB</div>
+        <h1>Make<br>your <em>mark.</em></h1>
+        <p class="intro">A steady hand. A spinning target. One more throw.</p>
+        <div class="side-rule"></div>
+        <div class="side-label">THE OBJECTIVE</div>
+        <p class="side-copy">Stick every blade in the timber. Miss the knives already there. Simple, right?</p>
+        <div class="tip"><span>✳</span><div><strong>THE SWEET SPOT</strong><br>Wait for your opening.<br>Timing is everything.</div></div>
+        <div class="side-bottom"><span>01 — TAKE AIM</span><span>02 — LET IT FLY</span><span>03 — REPEAT</span></div>
+      </aside>
+
+      <section class="game-shell" aria-label="Game area">
+        <div class="game-frame">
+          <canvas id="game" width="720" height="900" aria-label="Knife throwing game. Click or tap the game area, or press space to throw."></canvas>
+          <div class="game-top">
+            <div class="hud-block"><span id="mode-label">CLASSIC MODE</span><strong id="level-label">STAGE 01</strong></div>
+            <div class="hud-center"><span class="tiny-star">✦</span><span id="stage-kind">THE WARM UP</span><span class="tiny-star">✦</span></div>
+            <button class="icon-button" id="pause-button" aria-label="Pause game" title="Pause game">Ⅱ</button>
+          </div>
+          <div class="game-bottom">
+            <div class="hud-block"><span>WALLET</span><strong id="score-label">$0</strong></div>
+            <div class="throw-hint" id="throw-hint"><span class="mouse-icon">↟</span> TAP OR SPACE TO THROW</div>
+            <div class="hud-block align-right"><span>BLADES LEFT</span><strong id="remaining-label">06 <small>/ 06</small></strong></div>
+          </div>
+          <div id="overlay" class="overlay">
+            <div id="screen" class="screen"></div>
+          </div>
+          <div id="announcement" class="announcement" aria-live="polite"></div>
+          <div id="dummy-status" class="dummy-status" hidden></div>
+        </div>
+        <div class="under-game"><span><span class="keycap">SPACE</span> OR CLICK TO THROW</span><span>MADE FOR THE MOMENT <b>✳</b></span></div>
+      </section>
+
+      <aside class="side right-side">
+        <div class="eyebrow"><span class="line"></span> YOUR CLUB CARD</div>
+        <div class="stat-card">
+          <span class="stat-icon">✳</span>
+          <span class="side-label">YOUR MONEY</span>
+          <strong id="best-side">$0</strong>
+          <small>EARN. SAVE. UNLOCK NEW SKINS.</small>
+        </div>
+        <div class="progress-card">
+          <div class="progress-heading"><span class="side-label">CLASSIC PROGRESS</span><span id="progress-side">01</span></div>
+          <div class="progress-track"><div id="progress-fill"></div></div>
+          <p>Every great throw starts somewhere.</p>
+        </div>
+        <div class="side-rule"></div>
+        <div class="side-label">HOW TO PLAY</div>
+        <div class="instruction"><span>01</span><p><strong>Watch the spin</strong><br>Find a clear spot on the log.</p></div>
+        <div class="instruction"><span>02</span><p><strong>Throw your blade</strong><br>Click, tap, or press space.</p></div>
+        <div class="instruction"><span>03</span><p><strong>Stick the landing</strong><br>Avoid the other blades!</p></div>
+        <div class="signature">GOOD LUCK OUT THERE <span>✦</span></div>
+      </aside>
+    </main>
+    <footer><span>© TIMBER & STEEL THROWING CLUB</span><span>TAKE YOUR TIME. MAKE IT COUNT.</span></footer>
+  </div>
+  <script src="game.js"></script>
+</body>
+</html>
