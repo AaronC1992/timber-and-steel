@@ -6,7 +6,7 @@ const vm = require("node:vm");
 
 const source = fs.readFileSync(path.join(__dirname, "..", "game.js"), "utf8");
 
-function loadGame(seed = 1, stored = null) {
+function loadGame(seed = 1, stored = null, device = {}) {
   let value = seed;
   const math = Object.create(Math);
   math.random = () => {
@@ -16,12 +16,16 @@ function loadGame(seed = 1, stored = null) {
   const gradient = { addColorStop() {} };
   const translations = [];
   const drawing = new Proxy({}, { get: (_, key) => key === "translate" ? (...args) => translations.push(args) : key.startsWith("create") ? () => gradient : () => {} });
+  const offscreenDrawing = new Proxy({}, { get: (_, key) => key.startsWith("create") ? () => gradient : () => {} });
   const elements = new Map();
+  const frames = new Map();
+  let nextFrame = 0, paints = 0, canvasCount = 0;
+  const documentListeners = {}, windowListeners = {};
   function element(id) {
     if (!elements.has(id)) elements.set(id, {
-      style: { setProperty(key, value) { this[key] = value; } }, classList: { add() {}, remove() {}, toggle() {} },
+      dataset: {}, style: { setProperty(key, value) { this[key] = value; } }, classList: { add() {}, remove() {}, toggle() {} },
       listeners: {}, addEventListener(name, callback) { this.listeners[name] = callback; },
-      getContext: () => drawing, textContent: "", innerHTML: ""
+      querySelectorAll: () => [], getContext: () => drawing, textContent: "", innerHTML: ""
     });
     return elements.get(id);
   }
@@ -31,25 +35,170 @@ function loadGame(seed = 1, stored = null) {
     setItem(key, value) { if (this.fail) throw new Error("Storage blocked"); this.value = value; }
   };
   const context = vm.createContext({
-    Math: math, console, window: {}, setInterval: () => 1, clearInterval() {},
+    Math: math, console, Event, countPaint: () => paints++,
+    window: { navigator: device, devicePixelRatio: device.dpr || 1, addEventListener: (name, callback) => { windowListeners[name] = callback; },
+      matchMedia: () => ({ matches: device.reducedMotion || false }) },
+    requestAnimationFrame: callback => { frames.set(++nextFrame, callback); return nextFrame; },
+    cancelAnimationFrame: id => frames.delete(id),
+    setInterval: () => 1, clearInterval() {},
     getComputedStyle: () => ({ paddingLeft: "20px", paddingRight: "20px", paddingTop: "30px", paddingBottom: "30px" }),
-    document: { documentElement: element("root"), getElementById: element, querySelector: element, createElement: element, addEventListener() {} },
+    document: { hidden: false, documentElement: element("root"), getElementById: element, querySelector: element,
+      createElement: () => { const canvas = element(`canvas-${++canvasCount}`); canvas.getContext = () => offscreenDrawing; return canvas; }, dispatchEvent() {},
+      addEventListener: (name, callback) => { documentListeners[name] = callback; } },
     localStorage: storage
   });
   // Expose the closure only in this in-memory test copy, not in the browser game.
   const instrumented = source.replace(
-    "updateSide(); menu(); requestAnimationFrame(loop);",
-    "globalThis.api = { game, bonusMoney, config, rewards, fitScreen, render, startStage, update, throwKnife, changeRotation, pause, audio, shopItem, itemDetail, collection, startRun, selectLevel, knives, logs, tracks, themes, modifiers, activeTheme, drawKnife, drawLog, drawBackground, drawShopPreview, drawTarget, findDummyHit, dummyParts, detachLimb, dummyWorld, victory, menu, resetProfile, confirmReset, setVisualTime: time => visualTime = time, getSave: () => save };"
+    "applyGraphics(); updateSide(); menu(); requestFrame();",
+    "applyGraphics(); globalThis.api = { game, bonusMoney, config, rewards, fitScreen, render, startStage, update, throwKnife, changeRotation, pause, audio, shopItem, itemDetail, collection, startRun, selectLevel, knives, logs, tracks, themes, modifiers, activeTheme, drawKnife, drawLog, drawBackground, drawShopPreview, drawTarget, findDummyHit, dummyParts, detachLimb, dummyWorld, victory, menu, resetProfile, confirmReset, detectGraphics, changePerformance, frameRate, resizeCanvas, performanceSettings, woodTextures, logSprites, backgrounds, dummySparks, setVisualTime: time => visualTime = time, getSave: () => save };"
   );
-  vm.runInContext(instrumented.replace("globalThis.api = {", "globalThis.api = { dummySkins, drawDummyPart, drawDummySkin,"), context);
+  vm.runInContext(instrumented.replace("globalThis.api = {", "globalThis.api = { dummySkins, drawDummyPart, drawDummySkin,")
+    .replace("function render() {", "function render() { globalThis.countPaint();"), context);
   context.api.audio.init = () => {};
   context.api.storage = storage;
   context.api.element = element;
   context.api.translations = translations;
+  context.api.tick = time => {
+    const pending = [...frames.values()];
+    frames.clear();
+    for (const callback of pending) callback(time);
+  };
+  context.api.pendingFrames = () => frames.size;
+  context.api.hide = hidden => { context.document.hidden = hidden; documentListeners.visibilitychange(); };
+  context.api.pageEvent = name => windowListeners[name]();
+  context.api.getPaints = () => paints;
   return context.api;
 }
 
 const STEP = 1 / 120;
+test("device detection is conservative and saved overrides survive reload and reset", () => {
+  const api = loadGame();
+  for (const device of [{ hardwareConcurrency: 2 }, { hardwareConcurrency: 4 }, { deviceMemory: 2 }, { hardwareConcurrency: 16, deviceMemory: 16, connection: { saveData: true } }]) {
+    assert.equal(api.detectGraphics(device), "low");
+  }
+  assert.equal(api.detectGraphics({ hardwareConcurrency: 8, deviceMemory: 8 }), "high");
+  assert.equal(api.detectGraphics({}), "medium");
+  assert.equal(api.detectGraphics({ hardwareConcurrency: 16 }), "medium");
+  assert.equal(api.changePerformance("graphics", "low"), true);
+  assert.equal(api.frameRate(), 30);
+  assert.equal(api.changePerformance("frameRate", "60"), true);
+  assert.equal(api.frameRate(), 60);
+  const restored = loadGame(1, api.storage.value, { hardwareConcurrency: 16, deviceMemory: 8 });
+  assert.equal(restored.getSave().graphics, "low");
+  assert.equal(restored.frameRate(), 60);
+  restored.storage.fail = true;
+  assert.equal(restored.changePerformance("graphics", "high"), false);
+  assert.equal(restored.getSave().graphics, "low");
+  assert.equal(restored.changePerformance("frameRate", "999"), false);
+  restored.storage.fail = false; restored.resetProfile();
+  assert.equal(restored.getSave().graphics, "auto");
+  assert.equal(restored.frameRate(), 120);
+  const corrupt = loadGame(1, JSON.stringify({ graphics: "__proto__", frameRate: -1 }));
+  assert.equal(corrupt.getSave().graphics, "auto");
+  assert.equal(corrupt.frameRate(), 60);
+});
+
+test("paint limits and simulation outcomes are independent of graphics and display refresh", () => {
+  const outcomes = [];
+  for (const [graphics, fps, refresh] of [["low", 30, 60], ["low", 30, 144], ["medium", 60, 120], ["high", 120, 144]]) {
+    const api = loadGame(5, JSON.stringify({ graphics }));
+    api.startRun("classic"); api.tick(0); api.throwKnife();
+    for (let frame = 1; frame <= refresh * 2; frame++) api.tick(frame * 1000 / refresh);
+    assert.ok(api.getPaints() <= fps * 2 + 2, `${graphics}/${refresh}: ${api.getPaints()} paints`);
+    assert.ok(api.getPaints() >= fps * 2 - 2, `${graphics}/${refresh}: paint limit should not halve frame rate`);
+    outcomes.push([api.game.rotation, api.game.speed, api.game.landed, api.getSave().wallet, api.game.changeIn]);
+  }
+  for (const outcome of outcomes.slice(1)) assert.deepEqual(outcome, outcomes[0]);
+});
+
+test("hidden and paused games stop scheduling frames and never catch up after resuming", () => {
+  const api = loadGame();
+  api.startRun("dummy"); api.tick(0); api.throwKnife(); api.tick(50);
+  const rotation = api.game.rotation, flight = api.game.flight.time;
+  api.hide(true);
+  assert.equal(api.game.state, "paused");
+  assert.equal(api.pendingFrames(), 0);
+  const paints = api.getPaints();
+  api.tick(5000); api.throwKnife();
+  assert.equal(api.getPaints(), paints);
+  assert.equal(api.game.flight.time, flight);
+  api.hide(false); api.tick(60000);
+  assert.equal(api.game.rotation, rotation);
+  assert.equal(api.game.flight.time, flight);
+  assert.equal(api.pendingFrames(), 0);
+  api.performanceSettings(true); api.tick(61000); api.update(.2);
+  assert.equal(api.game.rotation, rotation);
+  assert.equal(api.game.flight.time, flight);
+  api.pageEvent("pagehide");
+  assert.equal(api.pendingFrames(), 0);
+  api.pageEvent("pageshow"); api.tick(62000);
+  assert.equal(api.pendingFrames(), 0);
+});
+
+test("screen changes respect the paint cap and still render before becoming idle", () => {
+  const api = loadGame(1, JSON.stringify({ graphics: "low" }));
+  api.startStage(); api.tick(0);
+  api.pause(); api.tick(5);
+  assert.equal(api.getPaints(), 1);
+  assert.equal(api.pendingFrames(), 1);
+  api.tick(35);
+  assert.equal(api.getPaints(), 2);
+  assert.equal(api.pendingFrames(), 0);
+});
+
+test("low and reduced-motion menus sleep until the next interaction", () => {
+  for (const [graphics, reducedMotion] of [["low", false], ["high", true]]) {
+    const api = loadGame(1, JSON.stringify({ graphics }), { reducedMotion });
+    api.menu(); api.tick(0);
+    assert.equal(api.pendingFrames(), 0);
+    api.startStage();
+    assert.equal(api.pendingFrames(), 1);
+    api.tick(30000);
+    assert.equal(api.game.elapsed, 0);
+    api.tick(30050);
+    assert.ok(api.game.elapsed > 0 && api.game.elapsed <= .05);
+  }
+});
+
+test("low graphics reduce bounded effects and reduced motion suppresses sparks", () => {
+  const low = loadGame(1, JSON.stringify({ graphics: "low" }));
+  const high = loadGame(1, JSON.stringify({ graphics: "high" }));
+  low.dummySparks(100, 0); high.dummySparks(100, 0);
+  assert.ok(low.game.particles.length <= high.game.particles.length / 3);
+  for (let n = 0; n < 100; n++) { low.dummySparks(100, 0); high.dummySparks(100, 0); }
+  assert.equal(low.game.particles.length, 24);
+  assert.equal(high.game.particles.length, 100);
+  const reduced = loadGame(1, null, { reducedMotion: true });
+  reduced.dummySparks(100, 0);
+  assert.equal(reduced.game.particles.length, 0);
+});
+
+test("artwork is lazy, reused, bounded, and resized without changing collision geometry", () => {
+  const api = loadGame(1, JSON.stringify({ graphics: "low" }), { dpr: 3 });
+  assert.equal(api.woodTextures.size, 0);
+  assert.equal(api.logSprites.size, 0);
+  api.render();
+  assert.equal(api.woodTextures.size, 1);
+  const first = api.logSprites.values().next().value;
+  api.render();
+  assert.equal(api.logSprites.values().next().value, first);
+  for (let n = 0; n < api.logs.length; n++) api.drawLog(api.element("game").getContext(), n, 147, 1);
+  assert.ok(api.woodTextures.size <= 4);
+  assert.ok(api.logSprites.size <= 6);
+  assert.equal(api.woodTextures.values().next().value.width, 256);
+  api.startRun("classic");
+  const radius = api.game.radius, rotation = api.game.rotation;
+  api.element("game").clientWidth = 1920; api.element("game").clientHeight = 1080;
+  api.resizeCanvas();
+  assert.equal(api.element("game").width, 540);
+  assert.equal(api.element("game").height, 675);
+  api.changePerformance("graphics", "high");
+  assert.equal(api.element("game").width, 1440);
+  assert.equal(api.element("game").height, 1800);
+  assert.equal(api.game.radius, radius); assert.equal(api.game.rotation, rotation);
+  assert.equal(api.woodTextures.size, 0);
+});
+
 test("20 dummy skins preview safely, purchase once, persist, and reset", () => {
   const api = loadGame(1, JSON.stringify({ wallet: 300000 }));
   assert.equal(api.dummySkins.length, 21);

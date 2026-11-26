@@ -51,6 +51,27 @@ For dependable saving and sharing on phones/tablets, open the deployed HTTPS ver
 
 All artwork is drawn procedurally with Canvas and CSS; audio is synthesized with Web Audio. No external assets or services are needed.
 
+## Performance and installation
+
+Open **Settings → Performance & offline**, also available while paused.
+
+- **Auto graphics** uses CPU-core and memory hints when the browser provides them. Four or fewer logical cores, 2 GB or less reported device memory, or Data Saver selects Low. At least eight cores and 8 GB selects High; incomplete or intermediate hints select Medium. These are estimates, not hardware benchmarks; manual overrides are available.
+- **Low / Medium / High** default to **30 / 60 / 120 FPS**, respectively. Frame rate can also be set independently. These are maximums, limited by the display and device. Low reduces canvas resolution, particles, shadows and decorative animation; High supports a sharper backing canvas up to 1440 × 1800.
+- Gameplay uses the same fixed 120 Hz simulation regardless of graphics or rendering rate. Difficulty, hitboxes, rewards, and flight duration are unchanged. Cosmetic effects use separate randomness from gameplay.
+- Wood textures and static log/background artwork are generated only when needed, reused, and held in bounded caches. There are no remote images or audio downloads. Only visible animated shop previews are refreshed.
+- Hidden/offscreen games stop rendering and suspend audio. An active round returns **paused**, without advancing while hidden. Low and reduced-motion menus also stop their idle render loop. Reduced-motion preferences suppress sparks and screen shake.
+- Controls retain primary-touch input, large touch targets, safe-area padding, and portrait/landscape layouts. Graphics settings persist with your profile and reset to Auto on profile reset.
+
+### Install and play offline
+
+Visit the hosted game once while online. In **Performance & offline**, wait for **Offline ready** before disconnecting. The whole game, including all skins and synthesized music, can then reopen offline. Browser storage may be cleared or evicted, so offline availability is checked rather than assumed.
+
+Use **Install game** when your browser offers it, or its **Install / Add to Home Screen** menu. On iPhone/iPad, use **Safari → Share → Add to Home Screen**. Installation opens a standalone app window on supported browsers; availability depends on the browser and platform.
+
+PWA installation and offline caching require **HTTPS** (or **localhost** for development). Opening `index.html` directly still plays locally but cannot register a service worker. No account, subscription, or app store is required. Offline storage and saves stay in this browser; installing does not provide cross-device sync.
+
+Updates download in the background and wait until **all game tabs/windows are closed** before activating. Reopen afterward to use the new version; updates never force-reload an active round. Offline cache updates do not reset your profile.
+
 ## Gameplay regression tests
 
 ### Training dummy mode
@@ -63,11 +84,15 @@ Unlike Classic and Endless, dummy rewards stay pending until the stage is comple
 
 The dummy HUD shows gross earnings, accumulated penalties, and the remaining total. Completion results show **Earned** before deductions (including the completion bonus), **Limb penalties**, and **Total payout** separately; for example, $305 earned minus $300 penalties pays $5. Failed rounds show the same breakdown but explicitly pay $0 because pending winnings are forfeited.
 
-With Node.js installed, run `node --test tests\gameplay.test.cjs`. Tests exercise the actual game logic using seeded rotation patterns, including throw timing, pause behavior, collision detection, progression, and rapid-click difficulty.
+With Node.js installed, run `node --test tests\gameplay.test.cjs tests\pwa.test.cjs`. Tests exercise the actual game logic using seeded rotation patterns, including throw timing, pause behavior, collision detection, progression, rapid-click difficulty, frame-rate caps, graphics persistence, bounded artwork caches, and offline routing at root and subdirectory deployments.
+
+Chromium checks also cover 320×568, 844×390, and 1920×1080 viewports at 3× DPR: 44-pixel settings controls, the 30 FPS paint limit, hidden-canvas suspension, offline reload/throws with saved settings and wallet, installability, waiting updates, and failed-download messaging. These are browser-emulation checks, not physical-device performance benchmarks. Native installation and real low-end Android/iOS behavior still need device testing.
 
 ## Deploy
 
-Upload `index.html`, `style.css`, and `game.js` together to any static web host.
+Upload `index.html`, `style.css`, `game.js`, `pwa.js`, `sw.js`, `manifest.webmanifest`, and the complete `icons` directory together to any static web host. Keep their relative paths intact; root hosting and GitHub Pages project subdirectories are supported. Serve `sw.js` without long-lived HTTP caching and serve the manifest as `application/manifest+json`.
+
+**For every release that changes a cached file**, increment the cache version in `sw.js` and deploy the shell files together. The worker precaches the complete release before activation, and only deletes this game's older caches within the same deployment scope.
 
 For **GitHub Pages**, push these files to a repository, then enable Pages in repository settings, choosing the branch and root folder. Visit the Pages URL GitHub provides.
 

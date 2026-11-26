@@ -149,7 +149,7 @@
     { name: "Royal Victory", price: 9000, bpm: 116, root: 62, melody: [0, 4, 7, 12, null, 11, 9, 7, 5, 9, 12, 17, null, 14, 12, 7], bass: [-12, -8, -5, -7], voice: "square", style: "Triumphant arcade anthem" },
     { name: "Cosmic Canopy", price: 10000, bpm: 136, root: 61, melody: [0, 7, 14, 11, 4, 11, 16, 14, 2, 9, 16, 12, 5, 12, 19, 16], bass: [-24, -20, -22, -19], voice: "sine", style: "Sparkling space arpeggios" }
   ];
-  const defaults = { best: 0, wallet: 0, classicStage: 1, selected: 0, selectedLog: 0, selectedMusic: 0, selectedTheme: 0, selectedModifier: 0, selectedDummy: 0, activeModifiers: [], ownedKnives: [0], ownedLogs: [0], ownedMusic: [0], ownedThemes: [0], ownedModifiers: [0], ownedDummies: [0], music: 0.35, sound: 0.65 };
+  const defaults = { best: 0, wallet: 0, classicStage: 1, selected: 0, selectedLog: 0, selectedMusic: 0, selectedTheme: 0, selectedModifier: 0, selectedDummy: 0, activeModifiers: [], ownedKnives: [0], ownedLogs: [0], ownedMusic: [0], ownedThemes: [0], ownedModifiers: [0], ownedDummies: [0], music: 0.35, sound: 0.65, graphics: "auto", frameRate: "auto" };
   let save = { ...defaults };
   let shopCategory = "knife";
   let shopPage = 0;
@@ -157,6 +157,76 @@
   let visualTime = 0;
   let previewFrame = 0;
   const reducedMotion = window.matchMedia ? window.matchMedia("(prefers-reduced-motion: reduce)") : { matches: false };
+  const graphicsPresets = {
+    low: { fps: 30, resolution: .75, dpr: 1, texture: 256, particles: .25, maxParticles: 24, shadows: false, ambient: false },
+    medium: { fps: 60, resolution: 1, dpr: 1.5, texture: 512, particles: .6, maxParticles: 60, shadows: true, ambient: true },
+    high: { fps: 120, resolution: 2, dpr: 2, texture: 512, particles: 1, maxParticles: 100, shadows: true, ambient: true }
+  };
+  function detectGraphics(device = window.navigator || {}) {
+    const cores = device.hardwareConcurrency, memory = device.deviceMemory;
+    if (device.connection?.saveData || (cores > 0 && cores <= 4) || (memory > 0 && memory <= 2)) return "low";
+    if (cores >= 8 && memory >= 8) return "high";
+    return "medium";
+  }
+  const detectedGraphics = detectGraphics();
+  let graphics, graphicsLevel, renderScale = 1;
+  let frameId = 0, lastRender = null, accumulator = 0, dirty = true;
+  let pageVisible = !document.hidden, canvasVisible = true;
+  const SIMULATION_STEP = 1 / 120;
+  const woodTextures = new Map(), logSprites = new Map(), backgrounds = new Map();
+  // Cosmetic randomness must never change the target's future rotation pattern.
+  const effectRandom = random(86420);
+  const isVisible = () => pageVisible && canvasVisible && !document.hidden;
+  const isPaused = () => ["paused", "pause-settings", "pause-performance", "reset-confirm"].includes(game.state);
+  function requestFrame() {
+    dirty = true;
+    if (!frameId && isVisible()) frameId = requestAnimationFrame(loop);
+  }
+  function resizeCanvas() {
+    const width = canvas.clientWidth || W, height = canvas.clientHeight || H;
+    renderScale = Math.min(graphics.resolution, Math.min(width / W, height / H) * Math.min(window.devicePixelRatio || 1, graphics.dpr));
+    const pixelWidth = Math.max(1, Math.round(W * renderScale)), pixelHeight = Math.max(1, Math.round(H * renderScale));
+    if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
+      canvas.width = pixelWidth; canvas.height = pixelHeight;
+      logSprites.clear(); backgrounds.clear();
+    }
+    requestFrame();
+  }
+  function applyGraphics() {
+    graphicsLevel = save.graphics === "auto" ? detectedGraphics : save.graphics;
+    graphics = graphicsPresets[graphicsLevel];
+    woodTextures.clear(); logSprites.clear(); backgrounds.clear();
+    game.particles.length = Math.min(game.particles.length, graphics.maxParticles);
+    document.documentElement.dataset.graphics = graphicsLevel;
+    lastRender = null;
+    resizeCanvas();
+  }
+  const frameRate = () => save.frameRate === "auto" ? graphics.fps : Number(save.frameRate);
+  function changePerformance(key, value) {
+    const allowed = key === "graphics" ? ["auto", "low", "medium", "high"] : key === "frameRate" ? ["auto", "30", "60", "120"] : [];
+    if (!allowed.includes(value)) { console.warn("Invalid performance setting:", key, value); announce("That performance setting is unavailable."); return false; }
+    const before = save[key];
+    save[key] = value;
+    if (!persist()) {
+      save[key] = before;
+      announce("Setting not saved. Enable browser storage and try again.");
+      return false;
+    }
+    applyGraphics();
+    return true;
+  }
+  function cachedImage(cache, key, limit, create) {
+    let image = cache.get(key);
+    if (image) cache.delete(key);
+    else image = create();
+    cache.set(key, image);
+    if (cache.size > limit) cache.delete(cache.keys().next().value);
+    return image;
+  }
+  const particleCount = count => reducedMotion.matches ? 0 : Math.ceil(count * graphics.particles);
+  function addParticle(particle) {
+    if (game.particles.length < graphics.maxParticles) game.particles.push(particle);
+  }
   const SHOP_PAGE_SIZE = 4;
   let levelPage = 0;
   let resetFromPause = false;
@@ -188,6 +258,8 @@
         .filter(index => index > 0 && save.ownedModifiers.includes(index)))];
       save.music = Number.isFinite(stored.music) ? Math.max(0, Math.min(1, stored.music)) : defaults.music;
       save.sound = Number.isFinite(stored.sound) ? Math.max(0, Math.min(1, stored.sound)) : defaults.sound;
+      save.graphics = ["auto", "low", "medium", "high"].includes(stored.graphics) ? stored.graphics : "auto";
+      save.frameRate = ["auto", "30", "60", "120"].includes(stored.frameRate) ? stored.frameRate : "auto";
     }
   } catch (error) {
     console.warn("Saved progress could not be read:", error);
@@ -213,6 +285,7 @@
     const style = document.documentElement.style;
     for (const key of ["top", "bottom", "accent", "panel", "text"]) style.setProperty(`--theme-${key}`, theme[key]);
     document.documentElement.classList.toggle("custom-theme", (game.state === "shop-detail" && shopDetail?.category === "theme" ? shopDetail.index : save.selectedTheme) !== 0);
+    requestFrame();
   }
   function animatedColor(skin) {
     return skin.animation === "rainbow" ? `hsl(${(visualTime * 35) % 360}, 85%, 75%)` : skin.accent || skin.light;
@@ -260,6 +333,7 @@
   const audio = {
     context: null, musicTimer: null, note: 0, musicNodes: new Set(), previewTrack: null,
     init() {
+      if (!isVisible()) return;
       if (!this.context) {
         const AudioContext = window.AudioContext || window.webkitAudioContext;
         if (!AudioContext) return;
@@ -274,9 +348,16 @@
       this.musicTimer = null; this.note = 0;
       this.musicNodes.forEach(node => node.stop());
       this.musicNodes.clear();
-      if (!this.context) return;
+      if (!this.context || !isVisible()) return;
       this.musicTimer = setInterval(() => this.musicStep(), 30000 / tracks[this.previewTrack ?? save.selectedMusic].bpm);
       this.musicStep();
+    },
+    suspend() {
+      if (this.musicTimer) clearInterval(this.musicTimer);
+      this.musicTimer = null;
+      this.musicNodes.forEach(node => node.stop());
+      this.musicNodes.clear();
+      if (this.context?.state === "running") this.context.suspend().catch(error => console.warn("Audio could not pause:", error));
     },
     tone(freq, duration, type, volume, slide = 1, delay = 0, music = false) {
       if (!this.context || this.context.state !== "running" || volume <= 0) return;
@@ -326,7 +407,7 @@
     required: 6, landed: 0, rotation: 0, speed: .8, targetSpeed: .8, changeIn: 4,
     rotationPhase: 0, changesSinceReverse: 0,
     radius: 145, embedded: [], apple: null, flight: null, particles: [], shake: 0,
-    timer: 0, elapsed: 0, lastTime: 0, stagePoints: 0, stagePenalty: 0, dummy: null, debris: []
+    timer: 0, elapsed: 0, lastTime: null, stagePoints: 0, stagePenalty: 0, dummy: null, debris: []
   };
   const clamp = (n, min, max) => Math.max(min, Math.min(max, n));
   const angleDistance = (a, b) => Math.abs(Math.atan2(Math.sin(a - b), Math.cos(a - b)));
@@ -378,12 +459,14 @@
   function showScreen(html) {
     screen.className = game.state === "collection" ? "screen shop-screen" : game.state === "shop-detail" ? "screen detail-screen" : game.state === "level-select" ? "screen level-screen" : "screen";
     screen.classList.toggle("menu-screen", game.state === "menu");
+    screen.classList.toggle("performance-screen", ["performance", "pause-performance"].includes(game.state));
     overlay.classList.toggle("item-detail", game.state === "shop-detail");
     screen.innerHTML = html;
     overlay.classList.remove("hidden");
     screen.scrollTop = 0;
     fitScreen();
     updateHud();
+    requestFrame();
   }
   function fitScreen() {
     if (!overlay.clientHeight || !screen.offsetHeight) return;
@@ -393,7 +476,7 @@
     const scale = Math.min(1, (overlay.clientWidth - horizontal) / screen.offsetWidth, (overlay.clientHeight - vertical) / screen.offsetHeight);
     screen.style.setProperty("--screen-scale", Math.max(0, scale));
   }
-  function hideScreen() { overlay.classList.add("hidden"); updateHud(); }
+  function hideScreen() { overlay.classList.add("hidden"); updateHud(); requestFrame(); }
   function button(label, action, primary = false) {
     return `<button class="button${primary ? " primary" : ""}" data-action="${action}">${label}</button>`;
   }
@@ -487,7 +570,7 @@
     if (game.state !== "playing") return;
     game.state = "paused";
     showScreen(`<div class="menu-ornament">Ⅱ</div><div class="overline">TAKE A BREATHER</div><h2>On <em>pause.</em></h2>
-      <p class="subtitle">Your target isn't going anywhere.</p><div class="menu-buttons">${button("Resume", "resume", true)}${button("Restart stage", "restart")}${button("Sound settings", "pause-settings")}${button("Main menu", "menu", false)}</div>`);
+      <p class="subtitle">Your target isn't going anywhere.</p><div class="menu-buttons">${button("Resume", "resume", true)}${button("Restart stage", "restart")}${button("Settings", "pause-settings")}${button("Main menu", "menu", false)}</div>`);
   }
   function settings(fromPause) {
     game.state = fromPause ? "pause-settings" : "settings";
@@ -495,7 +578,25 @@
       <p class="subtitle">Set the mood for your next throw.</p>
       <label class="settings-row">MUSIC <span id="music-value">${Math.round(save.music * 100)}%</span><input type="range" min="0" max="100" value="${Math.round(save.music * 100)}" data-volume="music" aria-label="Music volume"></label>
       <label class="settings-row">SOUND EFFECTS <span id="sound-value">${Math.round(save.sound * 100)}%</span><input type="range" min="0" max="100" value="${Math.round(save.sound * 100)}" data-volume="sound" aria-label="Sound effects volume"></label>
-      <div class="menu-buttons">${button("Back", fromPause ? "back-pause" : "menu", true)}<button class="button danger" data-action="reset-profile">Reset profile</button></div>`);
+      <div class="menu-buttons">${button("Performance & offline", fromPause ? "pause-performance" : "performance")}${button("Back", fromPause ? "back-pause" : "menu", true)}<button class="button danger" data-action="reset-profile">Reset profile</button></div>`);
+  }
+  function performanceSettings(fromPause) {
+    game.state = fromPause ? "pause-performance" : "performance";
+    const options = (values, current) => values.map(([value, label]) => `<option value="${value}"${current === value ? " selected" : ""}>${label}</option>`).join("");
+    showScreen(`<h2>Play <em>your way.</em></h2>
+      <div class="performance-controls">
+        <label class="settings-row">GRAPHICS<select data-performance="graphics" aria-label="Graphics quality">${options([["auto", "Auto (device detected)"], ["low", "Low"], ["medium", "Medium"], ["high", "High"]], save.graphics)}</select></label>
+        <label class="settings-row">FRAME RATE<select data-performance="frameRate" aria-label="Frame rate limit">${options([["auto", "Auto (by graphics)"], ["30", "30 FPS - save power"], ["60", "60 FPS"], ["120", "120 FPS"]], save.frameRate)}</select></label>
+      </div>
+      <p id="performance-status" class="shop-message" role="status">${performanceSummary()}</p>
+      <p class="shop-message">Low reduces resolution, particles and shadows. Throw timing and hitboxes stay the same.</p>
+      <div class="offline-settings"><p id="offline-status" class="shop-message" role="status"></p>
+        <p id="install-status" class="shop-message"></p><button class="button" data-install hidden>Install game</button></div>
+      <div class="menu-buttons">${button("Back", fromPause ? "pause-settings" : "settings", true)}</div>`);
+    document.dispatchEvent(new Event("pwa-status-request"));
+  }
+  function performanceSummary() {
+    return `Detected: ${detectedGraphics}. Using: ${graphicsLevel}, up to ${frameRate()} FPS (display permitting).`;
   }
   function bonusMoney() {
     if (game.state !== "settings" && game.state !== "pause-settings") return;
@@ -514,7 +615,7 @@
   function confirmReset(message = "") {
     game.state = "reset-confirm";
     showScreen(`<div class="overline">START FRESH</div><h2>Reset your <em>profile?</em></h2>
-      <p class="subtitle">This permanently clears all money, best earnings, level progress, purchased skins, themes, and music tracks. It also restores default sound settings and ends the current run.</p>
+      <p class="subtitle">This permanently clears all money, best earnings, level progress, purchased skins, themes, and music tracks. It also restores default sound and automatic graphics settings and ends the current run.</p>
       <div class="reward-line">WALLET: $0<br><br>PROGRESS: LEVEL 1<br><br>FREE STARTER SKINS & ORIGINAL MUSIC ONLY</div>
       ${message ? `<p class="shop-message" role="alert">${message}</p>` : ""}
       <div class="menu-buttons">${button("Cancel", "cancel-reset", true)}<button class="button danger" data-action="confirm-reset">Reset everything</button></div>`);
@@ -533,11 +634,11 @@
     game.required = config(1).required; game.radius = config(1).radius;
     game.embedded = []; game.apple = null; game.flight = null;
     game.dummy = null; game.debris = []; game.particles = []; game.shake = 0;
-    game.timer = 0; game.elapsed = 0; game.lastTime = 0;
+    game.timer = 0; game.elapsed = 0; game.lastTime = null; accumulator = 0;
     game.speed = .8; game.targetSpeed = .8; game.changeIn = 4;
     game.rotationPhase = 0; game.changesSinceReverse = 0;
     shopCategory = "knife"; shopPage = 0; levelPage = 0;
-    audio.switchTrack(); menu(); announce("Profile reset. Fresh start!");
+    applyGraphics(); audio.switchTrack(); menu(); announce("Profile reset. Fresh start!");
     return true;
   }
   function collection(message = "") {
@@ -656,7 +757,7 @@
       <div class="menu-buttons">${button("Retry stage &nbsp; ↻", "restart", true)}${button("Skin shop", "collection")}${button("Main menu", "menu")}</div>`);
   }
   function throwKnife() {
-    if (game.state !== "playing" || game.flight) return;
+    if (!isVisible() || game.state !== "playing" || game.flight) return;
     audio.init(); audio.effect("throw");
     game.flight = { y: 765, from: 765, to: CY + (game.mode === "dummy" ? 100 : game.radius), time: 0, duration: modifierEffects().flight };
   }
@@ -692,10 +793,10 @@
   }
   function dummySparks(distance, angle) {
     const world = angle + game.rotation;
-    for (let i = 0; i < 18; i++) game.particles.push({
+    for (let i = 0; i < particleCount(18); i++) addParticle({
       x: CX + Math.cos(world) * distance, y: CY + Math.sin(world) * distance,
-      vx: (Math.random() - .5) * 260, vy: -Math.random() * 200,
-      life: .65, max: .65, size: 2 + Math.random() * 4, color: i % 2 ? "#ffe79b" : "#9de6ed"
+      vx: (effectRandom() - .5) * 260, vy: -effectRandom() * 200,
+      life: .65, max: .65, size: 2 + effectRandom() * 4, color: i % 2 ? "#ffe79b" : "#9de6ed"
     });
   }
   function detachLimb(hit, angle) {
@@ -867,10 +968,10 @@
     const angle = Math.PI / 2 - game.rotation;
     const width = modifierEffects().width;
     const collision = game.embedded.some(k => angleDistance(k.angle, angle) < (game.mode === "dummy" ? .24 : config(game.level).spacing) * (width + (k.width || 1)) / 2);
-    game.flight = null; game.shake = collision ? 12 : 5;
-    for (let i = 0; i < (collision ? 22 : 13); i++) {
-      game.particles.push({ x: CX, y: CY + game.radius, vx: (Math.random() - .5) * 240, vy: -Math.random() * 160 + 30,
-        life: .35 + Math.random() * .5, max: .85, size: 2 + Math.random() * 6, color: collision ? (i % 2 ? "#fff0bc" : "#f4a458") : (i % 2 ? "#e9c18a" : "#9b5b36") });
+    game.flight = null; game.shake = reducedMotion.matches ? 0 : (collision ? 12 : 5) * graphics.particles;
+    for (let i = 0; i < particleCount(collision ? 22 : 13); i++) {
+      addParticle({ x: CX, y: CY + game.radius, vx: (effectRandom() - .5) * 240, vy: -effectRandom() * 160 + 30,
+        life: .35 + effectRandom() * .5, max: .85, size: 2 + effectRandom() * 6, color: collision ? (i % 2 ? "#fff0bc" : "#f4a458") : (i % 2 ? "#e9c18a" : "#9b5b36") });
     }
     if (collision) { gameOver(); return; }
     const dummyHit = game.dummy ? findDummyHit(angle) : null;
@@ -889,11 +990,11 @@
       const distance = targetRadius(game.radius, game.apple.angle) + APPLE_SIZE;
       const x = CX + Math.cos(worldAngle) * distance, y = CY + Math.sin(worldAngle) * distance;
       const fruitRandom = random(Math.floor((game.apple.angle + TAU) * 10000));
-      for (const half of [-1, 1]) {
-        game.particles.push({ x, y, vx: half * 130, vy: -95, life: .9, max: .9,
+      for (const half of reducedMotion.matches ? [] : [-1, 1]) {
+        addParticle({ x, y, vx: half * 130, vy: -95, life: .9, max: .9,
           size: APPLE_SIZE, kind: "apple", half });
       }
-      for (let i = 0; i < 12; i++) game.particles.push({ x, y, vx: (fruitRandom() - .5) * 220,
+      for (let i = 0; i < particleCount(12); i++) addParticle({ x, y, vx: (fruitRandom() - .5) * 220,
         vy: -fruitRandom() * 180, life: .5, max: .5, size: 3 + fruitRandom() * 4,
         color: i % 2 ? "#ffe7af" : "#f76653" });
       game.apple = null;
@@ -905,7 +1006,7 @@
     if (game.landed === game.required) {
       game.state = "finishing"; game.timer = .85;
       if (isBoss(game.level)) {
-        for (let i = 0; i < 50; i++) game.particles.push({ x: CX, y: CY, vx: (Math.random() - .5) * 480, vy: (Math.random() - .5) * 460, life: .8 + Math.random(), max: 1.8, size: 3 + Math.random() * 6, color: ["#ffd890", "#f5a85c", "#e7edd1"][i % 3] });
+        for (let i = 0; i < particleCount(50); i++) addParticle({ x: CX, y: CY, vx: (effectRandom() - .5) * 480, vy: (effectRandom() - .5) * 460, life: .8 + effectRandom(), max: 1.8, size: 3 + effectRandom() * 6, color: ["#ffd890", "#f5a85c", "#e7edd1"][i % 3] });
       }
     }
   }
@@ -915,8 +1016,9 @@
     return () => { value = (value * 1664525 + 1013904223) >>> 0; return value / 4294967296; };
   }
   function makeWood(skin) {
-    const c = document.createElement("canvas"); c.width = c.height = 512;
+    const c = document.createElement("canvas"); c.width = c.height = graphics.texture;
     const g = c.getContext("2d"), rnd = random(52342);
+    g.scale(c.width / 512, c.height / 512);
     const grad = g.createRadialGradient(220, 180, 5, 256, 256, 300);
     grad.addColorStop(0, skin.light); grad.addColorStop(.55, skin.middle); grad.addColorStop(1, skin.dark);
     g.fillStyle = grad; g.fillRect(0, 0, 512, 512);
@@ -931,13 +1033,12 @@
     }
     return c;
   }
-  const woodTextures = logs.map(makeWood);
   function drawApple(g, half = 0) {
     g.save();
     if (half) {
       g.beginPath(); g.rect(half < 0 ? -30 : 0, -35, 30, 65); g.clip();
     }
-    g.shadowColor = "#091a1580"; g.shadowBlur = 8; g.shadowOffsetY = 4;
+    g.shadowColor = graphics.shadows ? "#091a1580" : "transparent"; g.shadowBlur = graphics.shadows ? 8 : 0; g.shadowOffsetY = 4;
     const red = g.createRadialGradient(-8, -9, 2, 0, 0, 28);
     red.addColorStop(0, "#ff9a69"); red.addColorStop(.45, "#ef554b"); red.addColorStop(1, "#ab273a");
     g.fillStyle = red; g.strokeStyle = "#8c2631"; g.lineWidth = 1.5;
@@ -961,7 +1062,7 @@
     const k = knives[skin] || knives[0];
     const style = k.style || skin;
     g.save(); g.scale(scale, scale * width);
-    g.shadowColor = "#071511aa"; g.shadowBlur = 7; g.shadowOffsetY = 4;
+    g.shadowColor = graphics.shadows ? "#071511aa" : "transparent"; g.shadowBlur = graphics.shadows ? 7 : 0; g.shadowOffsetY = 4;
     const metal = g.createLinearGradient(0, -11, 0, 11);
     metal.addColorStop(0, "#f7ffff"); metal.addColorStop(.36, k.color); metal.addColorStop(.55, "#9eafad"); metal.addColorStop(1, "#edf5ee");
     g.fillStyle = metal; g.strokeStyle = "#586a68"; g.lineWidth = 1.5;
@@ -1003,6 +1104,26 @@
   }
   function drawBackground(g, themeIndex = null) {
     const theme = themeIndex === null ? activeTheme() : themes[themeIndex];
+    const image = cachedImage(backgrounds, theme, 2, () => {
+      const c = document.createElement("canvas");
+      c.width = canvas.width; c.height = canvas.height;
+      const background = c.getContext("2d");
+      background.scale(c.width / W, c.height / H);
+      drawStaticBackground(background, theme);
+      return c;
+    });
+    g.drawImage(image, 0, 0, W, H);
+    if (theme.animation && graphics.ambient && !reducedMotion.matches) {
+      g.fillStyle = animatedColor(theme); g.globalAlpha = .15;
+      for (let i = 0; i < particleCount(24); i++) {
+        const x = (i * 137 + Math.sin(visualTime * .35 + i) * 45 + W) % W;
+        const y = (i * 89 - visualTime * (theme.animation === "sweep" ? 40 : 15) % H + H * 10) % H;
+        g.beginPath(); g.arc(x, y, theme.animation === "rainbow" ? 28 : 4 + 2 * Math.sin(visualTime + i), 0, TAU); g.fill();
+      }
+      g.globalAlpha = 1;
+    }
+  }
+  function drawStaticBackground(g, theme) {
     const bg = g.createLinearGradient(0, 0, 0, H); bg.addColorStop(0, theme.top); bg.addColorStop(1, theme.bottom);
     g.fillStyle = bg; g.fillRect(0, 0, W, H);
     const glow = g.createRadialGradient(CX, CY, 40, CX, CY, 430); glow.addColorStop(0, "#9db48c35"); glow.addColorStop(1, "#1c393300");
@@ -1015,15 +1136,6 @@
     for (let i = 0; i < 16; i++) { const a = i * TAU / 16; g.beginPath(); g.arc(CX + Math.cos(a) * 232, CY + Math.sin(a) * 232, i % 4 ? 1.5 : 3, 0, TAU); g.fill(); }
     g.fillStyle = "#d0ddc233"; g.font = "bold 10px Arial"; g.textAlign = "center"; g.letterSpacing = "2px";
     g.fillText("AIM TRUE", CX, 135); g.fillText("✦", CX, 690);
-    if (theme.animation) {
-      g.fillStyle = animatedColor(theme); g.globalAlpha = .15;
-      for (let i = 0; i < 24; i++) {
-        const x = (i * 137 + Math.sin(visualTime * .35 + i) * 45 + W) % W;
-        const y = (i * 89 - visualTime * (theme.animation === "sweep" ? 40 : 15) % H + H * 10) % H;
-        g.beginPath(); g.arc(x, y, theme.animation === "rainbow" ? 28 : 4 + 2 * Math.sin(visualTime + i), 0, TAU); g.fill();
-      }
-      g.globalAlpha = 1;
-    }
   }
   function targetRadius(radius, angle, level = game.level) {
     if (level < 4) return radius;
@@ -1041,9 +1153,34 @@
     g.closePath();
   }
   function drawLog(g, index, r, level) {
+    const extent = r + 58, size = extent * 2;
+    const key = `${index}:${r}:${level < 4 ? "circle" : isBoss(level) ? "boss" : "lobed"}`;
+    const image = cachedImage(logSprites, key, 6, () => {
+      const c = document.createElement("canvas");
+      const scale = Math.max(.75, renderScale);
+      c.width = c.height = Math.ceil(size * scale);
+      const sprite = c.getContext("2d");
+      sprite.scale(c.width / size, c.height / size); sprite.translate(extent, extent);
+      drawLogBase(sprite, index, r, level);
+      return c;
+    });
+    g.drawImage(image, -extent, -extent, size, size);
+    const skin = logs[index];
+    if (skin.animation) {
+      g.save();
+      g.strokeStyle = animatedColor(skin); g.lineWidth = 3;
+      g.globalAlpha = .5 + .2 * Math.sin(visualTime * 2);
+      for (let i = 0; i < 3; i++) {
+        const angle = visualTime * (skin.animation === "sweep" ? 1 : .4) + i * TAU / 3;
+        g.beginPath(); g.arc(0, 0, r * (.4 + i * .22), angle, angle + 1.5); g.stroke();
+      }
+      g.restore();
+    }
+  }
+  function drawLogBase(g, index, r, level) {
     const skin = logs[index];
     g.save();
-    g.shadowColor = "#07151299"; g.shadowBlur = 25; g.shadowOffsetY = 17;
+    g.shadowColor = graphics.shadows ? "#07151299" : "transparent"; g.shadowBlur = graphics.shadows ? 25 : 0; g.shadowOffsetY = 17;
     g.fillStyle = skin.bark; targetPath(g, r + 12, level); g.fill();
     g.shadowColor = "transparent";
     g.strokeStyle = skin.rim; g.lineWidth = 18; targetPath(g, r + 3, level); g.stroke();
@@ -1053,7 +1190,8 @@
       g.strokeStyle = i % 3 ? skin.dark : skin.light; g.lineWidth = 3 + i % 4;
       g.beginPath(); g.moveTo(Math.cos(a) * (edge - 3), Math.sin(a) * (edge - 3)); g.lineTo(Math.cos(a + .015) * (edge + 11), Math.sin(a + .015) * (edge + 11)); g.stroke();
     }
-    g.save(); targetPath(g, r - 3, level); g.clip(); g.drawImage(woodTextures[index], -r - 5, -r - 5, (r + 5) * 2, (r + 5) * 2); g.restore();
+    const texture = cachedImage(woodTextures, index, 4, () => makeWood(skin));
+    g.save(); targetPath(g, r - 3, level); g.clip(); g.drawImage(texture, -r - 5, -r - 5, (r + 5) * 2, (r + 5) * 2); g.restore();
     g.strokeStyle = "#f5d2a06b"; g.lineWidth = 2; targetPath(g, r - 6, level); g.stroke();
     g.fillStyle = "#76503750"; g.beginPath(); g.arc(0, 0, 5, 0, TAU); g.fill();
     if (skin.emblem) {
@@ -1061,14 +1199,6 @@
       g.fillText(skin.emblem, 0, 12); g.globalAlpha = 1;
     }
     if (isBoss(level)) { g.strokeStyle = "#fbe4ad99"; g.lineWidth = 2; g.beginPath(); g.arc(0, 0, r * .55, 0, TAU); g.stroke(); g.fillStyle = "#fff0c288"; g.font = "28px Georgia"; g.textAlign = "center"; g.fillText("✦", 0, 10); }
-    if (skin.animation) {
-      g.strokeStyle = animatedColor(skin); g.lineWidth = 3;
-      g.globalAlpha = .5 + .2 * Math.sin(visualTime * 2);
-      for (let i = 0; i < 3; i++) {
-        const angle = visualTime * (skin.animation === "sweep" ? 1 : .4) + i * TAU / 3;
-        g.beginPath(); g.arc(0, 0, r * (.4 + i * .22), angle, angle + 1.5); g.stroke();
-      }
-    }
     g.restore();
   }
   function drawTarget(g) {
@@ -1085,13 +1215,14 @@
     g.restore();
   }
   function render() {
+    ctx.setTransform(canvas.width / W, 0, 0, canvas.height / H, 0, 0);
     ctx.clearRect(0, 0, W, H);
     ctx.save();
-    if (game.shake > .1 && !["paused", "pause-settings", "reset-confirm"].includes(game.state)) {
-      ctx.translate((Math.random() - .5) * game.shake, (Math.random() - .5) * game.shake);
+    if (game.shake > .1 && !isPaused() && !reducedMotion.matches) {
+      ctx.translate((effectRandom() - .5) * game.shake, (effectRandom() - .5) * game.shake);
     }
     drawBackground(ctx); drawTarget(ctx);
-    if (game.state === "playing" || game.state === "paused" || game.state === "pause-settings" || game.state === "finishing") {
+    if (game.state === "playing" || isPaused() || game.state === "finishing") {
       if (game.flight) { ctx.save(); ctx.translate(CX, game.flight.y); ctx.rotate(Math.PI / 2); drawKnife(ctx, save.selected, 1.08); ctx.restore(); }
       else if (game.state !== "finishing") { ctx.save(); ctx.translate(CX, 750); ctx.rotate(Math.PI / 2); drawKnife(ctx, save.selected, 1.08); ctx.restore(); }
     }
@@ -1116,7 +1247,7 @@
     ctx.restore();
   }
   function update(dt) {
-    const moving = game.state === "playing" || game.state === "finishing" || game.state === "menu" || game.state === "collection" || game.state === "settings";
+    const moving = game.state === "playing" || game.state === "finishing" || (graphics.ambient && !reducedMotion.matches && ["menu", "collection", "settings"].includes(game.state));
     if (moving) {
       game.elapsed += dt; game.changeIn -= dt;
       if (game.changeIn <= 0) changeRotation();
@@ -1132,27 +1263,53 @@
       if (t >= 1) impact();
     }
     if (game.state === "finishing") { game.timer -= dt; if (game.timer <= 0) victory(); }
-    if (game.state !== "paused" && game.state !== "pause-settings" && game.state !== "reset-confirm") {
+    if (!isPaused()) {
       game.particles.forEach(p => { p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 220 * dt; p.life -= dt; });
-      game.particles = game.particles.filter(p => p.life > 0);
+      let live = 0;
+      for (const particle of game.particles) if (particle.life > 0) game.particles[live++] = particle;
+      game.particles.length = live;
       game.debris.forEach(piece => updateTether(piece, dt));
       game.shake *= Math.pow(.01, dt);
     }
   }
   function loop(time) {
-    const dt = game.lastTime ? Math.min((time - game.lastTime) / 1000, .05) : 0;
+    frameId = 0;
+    if (!isVisible()) return;
+    const dt = game.lastTime === null ? 0 : Math.max(0, Math.min((time - game.lastTime) / 1000, .05));
     game.lastTime = time;
-    if (!reducedMotion.matches && !["paused", "pause-settings", "reset-confirm"].includes(game.state)) visualTime += dt;
-    update(dt); render();
-    if (time - previewFrame > 66) {
+    if (!reducedMotion.matches && graphics.ambient && !isPaused()) visualTime += dt;
+    accumulator += dt;
+    while (accumulator + 1e-9 >= SIMULATION_STEP) {
+      update(SIMULATION_STEP);
+      accumulator = Math.max(0, accumulator - SIMULATION_STEP);
+    }
+    const active = game.state === "playing" || game.state === "finishing";
+    const interval = 1000 / (active ? frameRate() : Math.min(30, frameRate()));
+    if (lastRender === null || time - lastRender >= interval - .1) {
+      render(); dirty = false;
+      lastRender = lastRender === null ? time : lastRender + Math.floor((time - lastRender + .1) / interval) * interval;
+    }
+    if (graphics.ambient && !reducedMotion.matches && !isPaused() && time - previewFrame > 66) {
       previewFrame = time;
-      if (game.state === "shop-detail") drawDetailPreview();
+      if (game.state === "shop-detail" && shopCatalog(shopDetail.category)[shopDetail.index].animation) drawDetailPreview();
       else if (game.state === "collection") screen.querySelectorAll("[data-preview]").forEach(preview => {
         const index = Number(preview.dataset.preview);
         if (shopCatalog(shopCategory)[index].animation) drawShopPreview(preview.getContext("2d"), shopCategory, index);
       });
     }
-    requestAnimationFrame(loop);
+    const ambient = graphics.ambient && !reducedMotion.matches && (["menu", "collection", "settings"].includes(game.state)
+      || activeTheme().animation || (game.state === "shop-detail" && shopCatalog(shopDetail.category)[shopDetail.index].animation));
+    if (dirty || active || (!isPaused() && (ambient || game.particles.length || game.debris.length || game.shake > .1))) {
+      if (!frameId) frameId = requestAnimationFrame(loop);
+    } else { game.lastTime = null; accumulator = 0; }
+  }
+  function syncVisibility() {
+    if (!isVisible()) {
+      if (game.state === "playing") pause();
+      if (frameId) cancelAnimationFrame(frameId);
+      frameId = 0; audio.suspend();
+    } else requestFrame();
+    game.lastTime = null; lastRender = null; accumulator = 0;
   }
   screen.addEventListener("click", event => {
     const target = event.target.closest("button");
@@ -1184,6 +1341,8 @@
       case "collection": collection(); break;
       case "settings": settings(false); break;
       case "pause-settings": settings(true); break;
+      case "performance": performanceSettings(false); break;
+      case "pause-performance": performanceSettings(true); break;
       case "reset-profile": resetFromPause = game.state === "pause-settings"; confirmReset(); break;
       case "cancel-reset": settings(resetFromPause); break;
       case "confirm-reset": resetProfile(); break;
@@ -1200,6 +1359,12 @@
     save[key] = Number(event.target.value) / 100;
     $(key + "-value").textContent = `${event.target.value}%`; persist();
   });
+  screen.addEventListener("change", event => {
+    const key = event.target.dataset.performance;
+    if (!key) return;
+    if (!changePerformance(key, event.target.value)) event.target.value = save[key];
+    $("performance-status").textContent = performanceSummary();
+  });
   canvas.addEventListener("pointerdown", event => {
     if (event.isPrimary === false || (event.button !== 0 && event.pointerType === "mouse")) return;
     event.preventDefault(); throwKnife();
@@ -1208,14 +1373,25 @@
   document.addEventListener("keydown", event => {
     if (event.code === "Space" && game.state === "playing") { event.preventDefault(); if (!event.repeat) throwKnife(); }
     else if (event.code === "Escape" && game.state === "playing") { event.preventDefault(); pause(); }
-    else if (event.code === "Escape" && game.state === "paused") { event.preventDefault(); game.state = "playing"; hideScreen(); }
+    else if (event.code === "Escape" && game.state === "paused") { event.preventDefault(); audio.init(); game.state = "playing"; hideScreen(); }
     else if (event.code === "Escape" && game.state === "shop-detail") { event.preventDefault(); collection(); }
   });
   document.querySelector(".brand").addEventListener("click", event => { event.preventDefault(); audio.init(); audio.effect("button"); menu(); });
-  document.addEventListener("visibilitychange", () => { if (document.hidden && game.state === "playing") pause(); game.lastTime = 0; });
+  document.addEventListener("visibilitychange", () => { pageVisible = !document.hidden; syncVisibility(); });
+  window.addEventListener("pagehide", () => { pageVisible = false; syncVisibility(); });
+  window.addEventListener("pageshow", () => { pageVisible = !document.hidden; syncVisibility(); });
+  window.addEventListener("resize", resizeCanvas);
+  reducedMotion.addEventListener?.("change", requestFrame);
+  if (typeof IntersectionObserver !== "undefined") {
+    const visibility = new IntersectionObserver(entries => {
+      canvasVisible = entries[0].isIntersecting;
+      syncVisibility();
+    });
+    visibility.observe(canvas);
+  }
   if (typeof ResizeObserver !== "undefined") {
     const menuResize = new ResizeObserver(fitScreen);
     menuResize.observe(overlay); menuResize.observe(screen);
   }
-  updateSide(); menu(); requestAnimationFrame(loop);
+  applyGraphics(); updateSide(); menu(); requestFrame();
 })();
